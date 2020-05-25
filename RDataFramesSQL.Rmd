@@ -1,0 +1,707 @@
+---
+title: "Odtwarzanie wyników kwerend  z ramek danych w R"
+author: "Rafał Bojarczuk"
+date: "15 04 2020"
+output: 
+  html_document:
+    df_print: paged
+    mainfont: Times New Roman
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+options(stringsAsFactors = FALSE)
+
+library(sqldf)
+library(data.table)
+#library(R.utils)
+library(dplyr)
+library(microbenchmark)
+library(pander)
+
+```
+
+
+#### Zadaniem było odtworzenie wyników zapytań SQL wykonanych na uproszczonym zbiorze danych z serwisu (https://travel.stackexchange.com), składającym się z ramek danych:
+* Badges.csv
+* Comments.csv
+* PostLinks.csv
+* Posts.csv
+* Tags.csv
+* Users.csv
+* Votes.csv
+
+##### za pomocą:
+1. funkcji bazowych
+2. pakietu dplyr
+3. pakietu data.table  
+
+  Po każdym podpunkcie szybkość wykonania funkcji zostanie porównana za pomocą microbenchmark::microbenchmark. Poprowność wyników sprawdzę za pomocą funkcji all_equal z pakietu dplyr, z argumentem ignore_row_order ustawionym na TRUE w przypadku, gdy w zapytaniu nie sortowaliśmy danych oraz równym FALSE gdy sortowaliśmy. Przykładowa fukncja porównująca:  
+
+```{r equality_check, echo=TRUE}
+ex1_check = function(){
+    sqldf<-ex1_sqldf()
+    base<-ex1_base()
+    dplyr<-ex1_dplyr()
+    dt<-ex1_DT()
+    base <- all_equal(sqldf, base, ignore_row_order = TRUE)
+    dplyr <- all_equal(sqldf, dplyr, ignore_row_order = TRUE)
+    dt <- all_equal(sqldf, dt, ignore_row_order = TRUE)
+    
+    return (c(IsBaseSolutionEqual=base, IsDPLYRSolutionEqual=dplyr, IsDTSolutionEqual=dt))
+}
+```
+
+
+
+### Wczytanie danych
+
+```{r loading data, echo=TRUE}
+Users <- read.csv("Users.csv")
+Tags <- read.csv("Tags.csv")
+Votes <- read.csv("Votes.csv")
+Posts <- read.csv("Posts.csv")
+PostLinks <- read.csv("PostLinks.csv")
+Comments <- read.csv("Comments.csv")
+Badges <- read.csv("Badges.csv")
+```
+
+### Zadanie 1
+
+  Najpierw w tabeli Votes zliczamy ile pozytywnych ocen dostał każdy post w każdym roku. Następnie łączymy ramkę z Posts i wyświetlamy najwyżej oceniany komentarz w każdym roku.
+```{r 1_sqdf reference query, echo=TRUE, warning=FALSE, results='asis'}
+ex1_sqldf = function(){
+  UpvotesPerYear <- sqldf("SELECT PostId, COUNT(*) AS Count, STRFTIME('%Y', Votes.CreationDate) AS Year 
+            FROM Votes WHERE VoteTypeId=2 GROUP BY PostId, Year" )
+  out <- sqldf("SELECT Posts.Title, UpVotesPerYear.Year, MAX(UpVotesPerYear.Count) AS Count 
+      FROM UpvotesPerYear
+      JOIN Posts ON Posts.Id=UpVotesPerYear.PostId
+      WHERE Posts.PostTypeId=1
+      GROUP BY Year")
+}
+```
+```{r 1, echo=FALSE, warning=FALSE, collapse=TRUE}
+rmarkdown::paged_table(ex1_sqldf())
+```
+
+
+#### Funkcje bazowe
+
+```{r 1_bazowe funkcje, echo=TRUE}
+ex1_base = function(){
+  sub <- subset(Votes, Votes$VoteTypeId==2)
+  sub[["CreationDate"]] <- format(as.Date(sub$CreationDate, format="%Y-%m-%d"),"%Y")
+  UpvotesPerYear <- aggregate(x = sub, by = list(Year = sub$CreationDate, Id = sub$PostId), FUN = length)[c(2,3,1)]
+  colnames(UpvotesPerYear)[2] <- "Count"
+  joined <- merge(Posts[Posts$PostTypeId==1,], UpvotesPerYear, by="Id")[c("Title", "Year", "Count")]
+  out <- merge(aggregate(Count ~ Year, max, data = joined), joined)[c(3,1,2)]
+}
+```
+
+#### dplyr
+
+
+```{r 1_dplyr, echo=TRUE}
+ex1_dplyr = function(){
+  UpvotesPerYear <- Votes %>% 
+    filter(VoteTypeId==2) %>%
+    mutate(Year = format(as.Date(CreationDate, format = '%Y-%m-%d'), "%Y")) %>%
+    group_by(Id = PostId, Year) %>%
+    summarise(Count=n())
+  out <- Posts %>%
+    filter(PostTypeId==1) %>%
+    inner_join(UpvotesPerYear) %>%
+    select(Title, Year, Count) %>%
+    group_by(Year) %>%
+    top_n(n=1, wt=Count)
+}
+```
+
+#### data.table
+
+
+```{r 1_data.table, echo=TRUE}
+ex1_DT = function(){
+  votesDT <- as.data.table(Votes)
+  postsDT <- as.data.table(Posts)
+  UpvotesPerYear <- votesDT[VoteTypeId==2, .(Count=.N), 
+                            by=.(Id=PostId, Year=format(as.Date(CreationDate, format = '%Y-%m-%d'), "%Y"))]
+  out<-postsDT[UpvotesPerYear, on='Id'][PostTypeId==1, .SD[which.max(Count)],
+                                        by=Year][,.(Title,Year,Count)]
+}
+
+```
+
+##### Podsumowanie
+
+
+```{r benchmark1, warning=FALSE, message=FALSE}
+ex1_benchmark = function(){
+  microbenchmark::microbenchmark(
+    sqldf=ex1_sqldf(),
+    base=ex1_base(),
+    dplyr=ex1_dplyr(),
+    data.table=ex1_DT(),
+    times=5
+  )
+  
+}
+result_1 = ex1_benchmark()
+pander(result_1)
+```
+
+```{r equality_check1, warning=FALSE, message=FALSE}
+ex1_check = function(){
+    sqldf<-ex1_sqldf()
+    base<-ex1_base()
+    dplyr<-ex1_dplyr()
+    dt<-ex1_DT()
+    base <- all_equal(sqldf, base, ignore_row_order = TRUE)
+    dplyr <- all_equal(sqldf, dplyr, ignore_row_order = TRUE)
+    dt <- all_equal(sqldf, dt, ignore_row_order = TRUE)
+
+    return (c(IsBaseSolutionEqual=base, IsDPLYRSolutionEqual=dplyr, IsDTSolutionEqual=dt))
+  
+}
+result_1 = ex1_check()
+result_1
+```
+
+### Zadanie 2
+
+  Wyświetlamy dane 10 użytkowników, których pytania zostały oznaczone jako ulubione najwięcej razy. Wyświetlamy również sumę polubień wszystkich tych użytkowników
+```{r 2_reference query, echo=TRUE, warning=FALSE, collapse=TRUE}
+ex2_sqldf = function(){
+  out <- sqldf("SELECT Users.DisplayName, Users.Age, Users.Location, SUM(Posts.FavoriteCount) AS FavoriteTotal,
+                Posts.Title AS MostFavoriteQuestion, MAX(Posts.FavoriteCount) AS MostFavoriteQuestionLikes
+              FROM Posts JOIN Users ON Users.Id=Posts.OwnerUserId
+              WHERE Posts.PostTypeId=1
+              GROUP BY OwnerUserId
+              ORDER BY FavoriteTotal DESC LIMIT 10")
+}
+
+```
+```{r 2, echo=FALSE, warning=FALSE, collapse=TRUE}
+rmarkdown::paged_table(ex2_sqldf())
+```
+
+#### Funkcje bazowe
+
+
+```{r 2_base functions, echo=TRUE}
+ex2_base = function(){
+  joined <- merge(Posts[Posts$PostTypeId==1,], Users, by.x="OwnerUserId", by.y="Id")
+  splitted <- split(joined, as.factor(joined$OwnerUserId))
+  
+  suppressWarnings(out <- data.frame(do.call(rbind, lapply(splitted, function(x) {return(
+    c(
+      DisplayName=x$DisplayName[1],
+      Age= x$Age[1],
+      Location = x$Location[1],
+      FavoriteTotal = sum(x$FavoriteCount, na.rm = TRUE),
+      MostFavoriteQuestion = x[which.max(x$FavoriteCount), "Title"],
+      MostFavoriteQuestionLikes = max(x$FavoriteCount, na.rm=TRUE)
+    ))}))))
+  out<- transform(out, Age = as.integer(Age), 
+                  FavoriteTotal = as.integer(FavoriteTotal),
+                  MostFavoriteQuestionLikes = as.integer(MostFavoriteQuestionLikes))
+  return(head(out[order(-out$FavoriteTotal),],10))
+}
+
+```
+
+
+#### dplyr
+
+
+```{r 2_dplyr, echo=TRUE}
+ex2_dplyr = function(){
+  out <- Posts %>%
+    filter(PostTypeId==1 & !is.na(FavoriteCount)) %>%
+    inner_join(Users, by = c("OwnerUserId" = "Id")) %>%
+    group_by(OwnerUserId) %>%
+    summarise(DisplayName=unique(DisplayName), Age=unique(Age), Location=unique(Location), 
+              FavoriteTotal = sum(FavoriteCount), MostFavoriteQuestion=Title[which.max(FavoriteCount)],
+              MostFavoriteQuestionLikes = max(FavoriteCount)) %>%
+    arrange(-FavoriteTotal) %>%
+    select(-OwnerUserId) %>%
+    head(10)
+  return(out)
+}
+```
+#### data.table
+
+```{r 2_data.table, echo=TRUE}
+ex2_DT = function(){
+  postsDT <- as.data.table(Posts)
+  usersDT <- as.data.table(Users)
+  out <- postsDT[usersDT, on=c(OwnerUserId = "Id")][PostTypeId==1 & !is.na(FavoriteCount),
+                  cbind(.SD[which.max(FavoriteCount)], FavoriteTotal=sum(FavoriteCount),
+                  MostFavoriteQuestionLikes=max(FavoriteCount)), by=OwnerUserId,
+                  .SDcols = c("DisplayName", 'Age', "Location", "Title")][order(-FavoriteTotal)[1:10], c(-1)]
+  setcolorder(out, c(1,2,3,5,4,6))
+  colnames(out)[5] = "MostFavoriteQuestion"
+  return(out)
+}
+
+```
+##### Podsumowanie
+
+```{r benchmark2, warning=FALSE}
+ex2_benchmark = function(){
+  microbenchmark::microbenchmark(
+    sqldf=ex2_sqldf(),
+    base=ex2_base(),
+    dplyr=ex2_dplyr(),
+    data.table=ex2_DT(),
+    times=5
+  )
+}
+result_2 = ex2_benchmark()
+pander(result_2)
+
+```
+
+```{r equality_check2, warning=FALSE, message=FALSE}
+ex2_check = function(){
+    sqldf<-ex2_sqldf()
+    base<-ex2_base()
+    dplyr<-ex2_dplyr()
+    dt<-ex2_DT()
+    base <- all_equal(sqldf, base)
+    dplyr <- all_equal(sqldf, dplyr)
+    dt <- all_equal(sqldf, dt)
+
+    return (c(IsBaseSolutionEqual=base, IsDPLYRSolutionEqual=dplyr, IsDTSolutionEqual=dt))
+  
+}
+result_2 = ex2_check()
+result_2
+```
+
+### Zadanie 3
+
+  Z ramki Posts wybierami odpowiedzi do postów, które mają pozytywny bilans ocen, łącząc ją ponownie z ramką Posts wyświetlamy oryginalne posty, do których odpowiedzi zostały przesłane i segregujemy je według pozytywnych odpowiedzi. Zatem wyświetlonych zostanie 10 postów, do których odpowiedź była najbardziej pomocna.
+  
+```{r 3_sqdf reference query, echo=TRUE, warning=FALSE, message=FALSE}
+ex3_sqldf = function(){
+  out <- sqldf("SELECT Posts.ID, Posts.Title, Posts2.PositiveAnswerCount
+              FROM Posts JOIN 
+              (
+                SELECT Posts.ParentID, COUNT(*) AS PositiveAnswerCount
+                FROM Posts
+                WHERE Posts.PostTypeID=2 AND Posts.Score>0
+                GROUP BY Posts.ParentID
+              ) AS Posts2
+              ON Posts.ID=Posts2.ParentID
+              ORDER BY Posts2.PositiveAnswerCount DESC LIMIT 10")
+}
+
+```
+```{r 3, echo=FALSE, warning=FALSE, collapse=TRUE}
+rmarkdown::paged_table(ex3_sqldf())
+```
+
+
+#### Funkcje bazowe
+
+```{r 3_base functions, echo=TRUE, warning=FALSE, message=FALSE}
+ex3_base = function(){
+  subset <- Posts[Posts$PostTypeId==2 & Posts$Score>0,c("ParentId", "AnswerCount")]
+  Posts2 <- aggregate(x = subset, by = list(ParentId=subset$ParentId), FUN = length)[,c(1,3)]
+  colnames(Posts2)[2] <- "PositiveAnswerCount"
+  
+  joined <- merge(Posts, Posts2, by.x="Id", by.y = "ParentId")
+  ret <- head(joined[order(-joined$PositiveAnswerCount), c("Id", "Title", "PositiveAnswerCount")],10)
+  rownames(ret) <- NULL
+  return(ret)
+}
+
+```
+
+#### dplyr
+
+
+```{r 3_dplyr, echo=TRUE, warning=FALSE, message=FALSE}
+ex3_dplyr = function(){
+  Posts2 <- Posts %>%
+    filter(PostTypeId==2 & Score > 0) %>%
+    group_by(ParentId) %>%
+    summarise(PositiveAnswerCount=n())
+  out <- Posts %>%
+    inner_join(Posts2, by = c("Id" = "ParentId")) %>%
+    select(Id, Title, PositiveAnswerCount) %>%
+    arrange(-PositiveAnswerCount) %>%
+    head(10)
+  rownames(out) <- NULL
+  return(out)
+}
+
+```
+
+#### data.table
+
+
+```{r 3_data.table, echo=TRUE, warning=FALSE, message=FALSE}
+ex3_DT = function(){
+  postsDT <- as.data.table(Posts)
+  Posts2 <- postsDT[PostTypeId==2 & Score>0, .(PositiveAnswerCount=.N), by=ParentId]
+  out <- postsDT[Posts2, on=c(Id="ParentId")][order(-PositiveAnswerCount)[1:10],
+                                              c("Id", "Title", "PositiveAnswerCount")]
+}
+
+```
+
+##### Podsumowanie
+
+```{r benchmark3, warning=FALSE, message=FALSE}
+ex3_benchmark = function(){
+  microbenchmark::microbenchmark(
+    sqldf=ex3_sqldf(),
+    base=ex3_base(),
+    dplyr=ex3_dplyr(),
+    data.table=ex3_DT(),
+    times=5
+  )
+}
+result_3 = ex3_benchmark()
+pander(result_3)
+
+```
+
+```{r equality_check3, warning=FALSE, message=FALSE}
+ex3_check = function(){
+    sqldf<-ex3_sqldf()
+    base<-ex3_base()
+    dplyr<-ex3_dplyr()
+    dt<-ex3_DT()
+    base <- all_equal(sqldf, base)
+    dplyr <- all_equal(sqldf, dplyr)
+    dt <- all_equal(sqldf, dt)
+
+    return (c(IsBaseSolutionEqual=base, IsDPLYRSolutionEqual=dplyr, IsDTSolutionEqual=dt))
+  
+}
+result_3 = ex3_check()
+result_3
+```
+
+### Zadanie 4
+
+  Wybieramy pytania, których odpowiedź dostała najwyższą ocenę. Wydaje mi się że kolumna Difference zawiera różnicę w ocenie między najwyżej ocenioną przez użytkowników odpowiedzą, a tą zaakceptowaną jako pomocną przez autora pytania, ale nie jestem tego pewny. Wybieramy wyniki dla których ta różnica jest większa od 50
+
+```{r 4_sqldf reference query, echo=TRUE, warning=FALSE, message=FALSE}
+ex4_sqldf = function(){
+  sqldf("SELECT Questions.Id, Questions.Title, BestAnswers.MaxScore,
+                Posts.Score AS AcceptedScore, BestAnswers.MaxScore-Posts.Score AS Difference
+              FROM
+              (
+                SELECT Id, ParentId, MAX(Score) AS MaxScore
+                FROM Posts
+                WHERE Posts.PostTypeID=2 
+                GROUP BY ParentID
+              ) AS BestAnswers
+              JOIN (
+                SELECT * FROM Posts
+                WHERE PostTypeId==1
+              ) AS Questions
+                ON Questions.Id=BestAnswers.ParentId
+              JOIN Posts ON QUestions.AcceptedAnswerId=Posts.Id
+              WHERE Difference > 50
+              ORDER BY Difference DESC")
+}
+
+```
+```{r 4, echo=FALSE, warning=FALSE, collapse=TRUE}
+rmarkdown::paged_table(ex4_sqldf())
+```
+
+#### Funkcje bazowe
+
+```{r 4_base functions, echo=TRUE, warning=FALSE, message=FALSE}
+
+ex4_base = function(){
+  
+  BestAnswers <- Posts[Posts$PostTypeId==2,]
+  BestAnswers <- aggregate(x=BestAnswers, by=list(ParendId=BestAnswers$ParentId),
+                           FUN=max)[,c("Id", "ParentId", "Score")]
+  colnames(BestAnswers)[3] <- "MaxScore"
+  Questions <- Posts[Posts$PostTypeId==1,]
+  out <- merge(merge(BestAnswers, Questions, by.x="ParentId", by.y = "Id"), Posts, 
+               by.x="AcceptedAnswerId", by.y = "Id")[,c("ParentId.x", "Title.x", "MaxScore", "Score.y")]
+  colnames(out)[1] <- "Id"
+  colnames(out)[2] <- "Title"
+  colnames(out)[4] <- "AcceptedScore"
+  out$Difference <- out$MaxScore - out$AcceptedScore
+  out <- out[out$Difference>50,]
+  out <- out[order(-out$Difference),]
+  rownames(out) <-NULL
+  return(out)
+}
+
+```
+
+#### dplyr
+
+```{r 4_dplyr, echo=TRUE, warning=FALSE, message=FALSE}
+ex4_dplyr = function(){
+  BestAnswers <- Posts %>%
+    filter(PostTypeId==2) %>%
+    group_by(ParentId) %>%
+    summarise(Id=Id[1],MaxScore=max(Score))
+  Questions <- Posts %>%
+    filter(PostTypeId==1)
+  out <- BestAnswers %>%
+    inner_join(Questions, by = c("ParentId" = "Id")) %>%
+    inner_join(Posts, by = c("AcceptedAnswerId" = "Id")) %>%
+    select(Id=ParentId.x, Title=Title.x, MaxScore=MaxScore, AcceptedScore=Score.y) %>%
+    mutate(Difference = MaxScore - AcceptedScore) %>%
+    filter(Difference>50) %>%
+    arrange(-Difference)
+  return(out)
+}
+
+```
+
+#### data.table
+
+```{r 4_data.table, echo=TRUE, warning=FALSE, message=FALSE}
+ex4_DT = function(){
+  postsDT <- as.data.table(Posts)
+  BestAnswers <- postsDT[PostTypeId==2,.(Id=Id[1], MaxScore=max(Score)),by=ParentId]
+  Questions <- postsDT[PostTypeId==1]
+  out <-BestAnswers[Questions, on=c(ParentId="Id")][postsDT, on=c(AcceptedAnswerId="Id")][!is.na(MaxScore),
+                      .(Id=ParentId, Title, MaxScore, AcceptedScore = i.Score, 
+                        Difference= MaxScore-i.Score)][Difference > 50][order(-Difference)]
+}
+
+```
+
+##### Podsumowanie
+
+```{r benchmark4, warning=FALSE, message=FALSE}
+ex4_benchmark = function(){
+  microbenchmark::microbenchmark(
+    sqldf=ex4_sqldf(),
+    base=ex4_base(),
+    dplyr=ex4_dplyr(),
+    data.table=ex4_DT(),
+    times=5
+  )
+}
+result_4 = ex4_benchmark()
+pander(result_4)
+
+```
+
+```{r equality_check4, warning=FALSE, message=FALSE}
+ex4_check = function(){
+    sqldf<-ex4_sqldf()
+    base<-ex4_base()
+    dplyr<-ex4_dplyr()
+    dt<-ex4_DT()
+    base <- all_equal(sqldf, base)
+    dplyr <- all_equal(sqldf, dplyr)
+    dt <- all_equal(sqldf, dt)
+
+    return (c(IsBaseSolutionEqual=base, IsDPLYRSolutionEqual=dplyr, IsDTSolutionEqual=dt))
+  
+}
+result_4 = ex4_check()
+result_4
+```
+
+
+### Zadanie 5
+
+  Dla każdego użytkownika oraz każdego jego posta zbieramy sumę ocen, wyświetlamy treść 10 najlepszych postów.
+  
+```{r 5_sqdf reference query, echo=TRUE, warning=FALSE, message=FALSE}
+ex5_sqldf = function(){
+    sqldf("SELECT Posts.Title, CmtTotScr.CommentsTotalScore
+              FROM
+              (
+                SELECT PostId, UserId, SUM(Score) AS CommentsTotalScore
+                FROM Comments
+                GROUP BY PostId, UserId
+              ) AS CmtTotScr
+              JOIN Posts ON Posts.ID=CmtTotScr.PostId AND Posts.OwnerUserId=CmtTotScr.UserId
+              WHERE Posts.PostTypeId=1
+              ORDER BY CmtTotScr.CommentsTotalScore DESC
+              LIMIT 10")
+}
+
+```
+```{r 5, echo=FALSE, warning=FALSE, collapse=TRUE}
+rmarkdown::paged_table(ex5_sqldf())
+```
+
+#### dplyr
+
+```{r 5_dplyr, echo=TRUE, warning=FALSE, message=FALSE}
+ex5_dplyr = function(){
+  CmtTotScr <- Comments %>%
+    group_by(PostId, UserId) %>%
+    summarise(CommentsTotalScore=sum(Score))
+  out <- CmtTotScr %>%
+    inner_join(Posts, by=c("PostId" = "Id", "UserId" = "OwnerUserId")) %>%
+    filter(PostTypeId==1) %>%
+    ungroup() %>%
+    select(Title, CommentsTotalScore) %>%
+    arrange(-CommentsTotalScore) %>%
+    head(10)
+  return(out)
+}
+
+```
+
+#### data.table
+
+```{r 5_data.table, echo=TRUE, warning=FALSE, message=FALSE}
+ex5_DT = function(){
+  commentsDT <- as.data.table(Comments)
+  postsDT <- as.data.table(Posts)
+  CmtTotScr <- commentsDT[,.(CommentsTotalScore=sum(Score)), by=list(PostId,UserId)]
+  out <- CmtTotScr[postsDT, on = c(PostId="Id", UserId="OwnerUserId")][PostTypeId==1,.(Title, CommentsTotalScore)][order(-CommentsTotalScore)][1:10]
+}
+
+
+```
+
+##### Podsumowanie
+
+```{r benchmark5, warning=FALSE, warning=FALSE, message=FALSE}
+ex5_benchmark = function(){
+  microbenchmark::microbenchmark(
+    sqldf=ex5_sqldf(),
+    #base=ex5_base(),
+    dplyr=ex5_dplyr(),
+    data.table=ex1_DT(),
+    times=5
+  )
+}
+result_5 = ex5_benchmark()
+pander(result_5)
+
+```
+
+```{r equality_check5, warning=FALSE, message=FALSE}
+ex5_check = function(){
+    sqldf<-ex5_sqldf()
+    #base<-ex5_base()
+    dplyr<-ex5_dplyr()
+    dt<-ex5_DT()
+    #base <- all_equal(sqldf, base)
+    dplyr <- all_equal(sqldf, dplyr)
+    dt <- all_equal(sqldf, dt)
+
+    return (c(IsBaseSolutionEqual="Nie zaimplementowana", IsDPLYRSolutionEqual=dplyr, IsDTSolutionEqual=dt))
+  
+}
+result_5 = ex5_check()
+result_5
+```
+
+
+### Zadanie 6
+
+  Wybieramy użytkowników którzy otrzymali od 2 do 10 odznak klasy pierwszej (prawdopodobnie bardzo wartościowych). Wyświetlamy dane tych użytkownikóW razem z ich punktami reputacji  
+  
+```{r 6_sqdf reference query, echo=TRUE, warning=FALSE, message=FALSE}
+ex6_sqldf = function(){
+    sqldf("SELECT DISTINCT Users.Id, Users.DisplayName, Users.Reputation, Users.Age, Users.Location
+              FROM
+              (
+                SELECT Name, UserId
+                FROM Badges
+                WHERE Name IN (
+                  SELECT Name
+                  FROM Badges
+                  WHERE Class=1
+                  GROUP BY Name
+                  HAVING COUNT(*) BETWEEN 2 AND 10
+                )
+                AND Class=1
+              ) AS ValuableBadges
+              JOIN Users ON ValuableBadges.UserId=Users.Id")
+}
+```
+```{r 6, echo=FALSE, warning=FALSE, collapse=TRUE}
+rmarkdown::paged_table(ex6_sqldf())
+```
+
+#### dplyr
+
+
+```{r 6_dplyr, echo=TRUE, warning=FALSE, message=FALSE}
+ex6_dplyr = function(){
+    names <- Badges %>%
+      filter(Class==1) %>%
+      group_by(Name) %>%
+      summarise(Count=n()) %>%
+      filter(between(Count, 2,10)) %>%
+      select(Name)
+    out <- Badges %>%
+      filter(Name %in% names$Name & Class==1) %>%
+      select(Name,UserId) %>%
+      inner_join(Users, by=c("UserId" = "Id")) %>%
+      distinct_at(vars(Id=UserId, DisplayName, Reputation, Age, Location))
+    return(out)
+}
+
+```
+
+#### data.table
+
+```{r 6_data.table, echo=TRUE, warning=FALSE, message=FALSE}
+ex6_DT = function(){
+  badgesDT <- as.data.table(Badges)
+  usersDT <- as.data.table(Users)
+  names <- badgesDT[Class==1,.(Count=.N), by=Name][Count>=2 & Count<=10, Name]
+  ValuableBadges <- badgesDT[Name %in% names & Class==1, .(Name, UserId)]
+  out <- merge.data.table(ValuableBadges, usersDT, by.x = c("UserId"), by.y = c("Id"))[,
+        .(Id=UserId, DisplayName, Reputation,
+                        Age, Location)]
+  
+  return(unique(out))
+}
+
+```
+
+##### Podsumowanie
+
+```{r benchmark6, warning=FALSE, message=FALSE}
+ex6_benchmark = function(){
+  microbenchmark::microbenchmark(
+    sqldf=ex6_sqldf(),
+    #base=ex6_base(),
+    dplyr=ex6_dplyr(),
+    data.table=ex6_DT(),
+    times=5
+  )
+}
+result_6 = ex6_benchmark()
+pander(result_6)
+
+```
+
+```{r equality_check6, warning=FALSE, message=FALSE}
+ex6_check = function(){
+    sqldf<-ex6_sqldf()
+    #base<-ex6_base()
+    dplyr<-ex6_dplyr()
+    dt<-ex6_DT()
+    #base <- all_equal(sqldf, base, ignore_row_order = TRUE)
+    dplyr <- all_equal(sqldf, dplyr, ignore_row_order = TRUE)
+    dt <- all_equal(sqldf, dt, ignore_row_order = TRUE)
+
+    return (c(IsBaseSolutionEqual="Nie zaimplementowana", IsDPLYRSolutionEqual=dplyr, IsDTSolutionEqual=dt))
+  
+}
+result_6 = ex6_check()
+result_6
+```
+
+Potwierdzam samodzielność powyższej pracy oraz niekorzystanie przeze mnie z niedozwolonych źródeł
+Rafał Bojarczuk
