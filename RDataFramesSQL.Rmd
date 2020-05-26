@@ -1,5 +1,5 @@
 ---
-title: "Odtwarzanie wyników kwerend  z ramek danych w R"
+title: "Odtwarzanie wyników kwerend z ramek danych w R"
 author: "Rafał Bojarczuk"
 date: "15 04 2020"
 output: 
@@ -23,7 +23,7 @@ library(pander)
 ```
 
 
-#### Zadaniem było odtworzenie wyników zapytań SQL wykonanych na uproszczonym zbiorze danych z serwisu (https://travel.stackexchange.com), składającym się z ramek danych:
+#### Moim celem było odtworzenie wyników zapytań SQL wykonanych na uproszczonym zbiorze danych z serwisu (https://travel.stackexchange.com), składającym się z ramek danych:
 * Badges.csv
 * Comments.csv
 * PostLinks.csv
@@ -389,7 +389,7 @@ result_3
 
 ### Zadanie 4
 
-  Wybieramy pytania, których odpowiedź dostała najwyższą ocenę. Wydaje mi się że kolumna Difference zawiera różnicę w ocenie między najwyżej ocenioną przez użytkowników odpowiedzą, a tą zaakceptowaną jako pomocną przez autora pytania, ale nie jestem tego pewny. Wybieramy wyniki dla których ta różnica jest większa od 50
+  Wybieramy pytania, których odpowiedź dostała najwyższą ocenę. Kolumna Difference zawiera różnicę w ocenie między najwyżej ocenioną przez użytkowników odpowiedzą, a tą zaakceptowaną jako pomocną przez autora pytania. Wybieramy wyniki dla których ta różnica jest większa od 50
 
 ```{r 4_sqldf reference query, echo=TRUE, warning=FALSE, message=FALSE}
 ex4_sqldf = function(){
@@ -702,6 +702,3 @@ ex6_check = function(){
 result_6 = ex6_check()
 result_6
 ```
-
-Potwierdzam samodzielność powyższej pracy oraz niekorzystanie przeze mnie z niedozwolonych źródeł
-Rafał Bojarczuk
